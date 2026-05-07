@@ -559,6 +559,14 @@ function buildParams(
 			enable_thinking: !!options?.reasoningEffort,
 			preserve_thinking: true,
 		};
+	} else if (compat.thinkingFormat === "volcano" && model.reasoning) {
+		const kwargs: Record<string, unknown> = {
+			thinking: !!options?.reasoningEffort,
+		};
+		if (options?.reasoningEffort) {
+			kwargs.reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+		}
+		(params as any).chat_template_kwargs = kwargs;
 	} else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
 		(params as any).thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
 		if (options?.reasoningEffort) {
@@ -768,6 +776,13 @@ export function convertMessages(
 					role: "user",
 					content: sanitizeSurrogates(msg.content),
 				});
+			} else if (compat.flattenUserContent) {
+				const text = msg.content
+					.filter((item) => item.type === "text")
+					.map((item) => sanitizeSurrogates((item as { type: "text"; text: string }).text))
+					.join("\n");
+				if (text.length === 0) continue;
+				params.push({ role: "user", content: text });
 			} else {
 				const content: ChatCompletionContentPart[] = msg.content.map((item): ChatCompletionContentPart => {
 					if (item.type === "text") {
@@ -1053,6 +1068,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 	const isMoonshot = provider === "moonshotai" || provider === "moonshotai-cn" || baseUrl.includes("api.moonshot.");
 	const isCloudflareWorkersAI = provider === "cloudflare-workers-ai" || baseUrl.includes("api.cloudflare.com");
 	const isCloudflareAiGateway = provider === "cloudflare-ai-gateway" || baseUrl.includes("gateway.ai.cloudflare.com");
+	const isVolcano = provider === "volcano" || baseUrl.includes("volces.com") || baseUrl.includes("volceapi.com");
 
 	const isNonStandard =
 		provider === "cerebras" ||
@@ -1063,12 +1079,13 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 		baseUrl.includes("deepseek.com") ||
 		isZai ||
 		isMoonshot ||
+		isVolcano ||
 		provider === "opencode" ||
 		baseUrl.includes("opencode.ai") ||
 		isCloudflareWorkersAI ||
 		isCloudflareAiGateway;
 
-	const useMaxTokens = baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway;
+	const useMaxTokens = baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isVolcano;
 
 	const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
 	const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
@@ -1077,24 +1094,27 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 	return {
 		supportsStore: !isNonStandard,
 		supportsDeveloperRole: !isNonStandard,
-		supportsReasoningEffort: !isGrok && !isZai && !isMoonshot && !isCloudflareAiGateway,
+		supportsReasoningEffort: !isGrok && !isZai && !isMoonshot && !isCloudflareAiGateway && !isVolcano,
 		supportsUsageInStreaming: true,
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: false,
 		requiresAssistantAfterToolResult: false,
 		requiresThinkingAsText: false,
 		requiresReasoningContentOnAssistantMessages: isDeepSeek,
-		thinkingFormat: isDeepSeek
-			? "deepseek"
-			: isZai
-				? "zai"
-				: provider === "openrouter" || baseUrl.includes("openrouter.ai")
-					? "openrouter"
-					: "openai",
+		thinkingFormat: isVolcano
+			? "volcano"
+			: isDeepSeek
+				? "deepseek"
+				: isZai
+					? "zai"
+					: provider === "openrouter" || baseUrl.includes("openrouter.ai")
+						? "openrouter"
+						: "openai",
 		openRouterRouting: {},
 		vercelGatewayRouting: {},
 		zaiToolStream: false,
-		supportsStrictMode: !isMoonshot && !isCloudflareAiGateway,
+		supportsStrictMode: !isMoonshot && !isCloudflareAiGateway && !isVolcano,
+		flattenUserContent: isVolcano,
 		cacheControlFormat,
 		sendSessionAffinityHeaders: false,
 		supportsLongCacheRetention: !(isCloudflareWorkersAI || isCloudflareAiGateway),
@@ -1127,6 +1147,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
 		vercelGatewayRouting: model.compat.vercelGatewayRouting ?? detected.vercelGatewayRouting,
 		zaiToolStream: model.compat.zaiToolStream ?? detected.zaiToolStream,
 		supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,
+		flattenUserContent: model.compat.flattenUserContent ?? detected.flattenUserContent,
 		cacheControlFormat: model.compat.cacheControlFormat ?? detected.cacheControlFormat,
 		sendSessionAffinityHeaders: model.compat.sendSessionAffinityHeaders ?? detected.sendSessionAffinityHeaders,
 		supportsLongCacheRetention: model.compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,
